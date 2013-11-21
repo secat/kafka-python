@@ -3,8 +3,6 @@ from collections import defaultdict
 from functools import partial
 from itertools import count
 import logging
-import socket
-import time
 
 from kafka.common import ErrorMapping, TopicAndPartition
 from kafka.common import ConnectionError, FailedPayloadsException
@@ -63,8 +61,7 @@ class KafkaClient(object):
 
     def _load_metadata_for_topics(self, *topics):
         """
-        Discover brokers and metadata for a set of topics. This method will
-        recurse in the event of a retry.
+        Discover brokers and metadata for a set of topics.
         """
         request_id = self._next_id()
         request = KafkaProtocol.encode_metadata_request(self.client_id,
@@ -72,7 +69,7 @@ class KafkaClient(object):
 
         response = self._send_broker_unaware_request(request_id, request)
         if response is None:
-            raise Exception("All servers failed to process request")
+            raise ConnectionError("All servers failed to process request")
 
         (brokers, topics) = KafkaProtocol.decode_metadata_response(response)
 
@@ -88,16 +85,12 @@ class KafkaClient(object):
             self.topic_partitions.pop(topic, None)
 
             if not partitions:
-                log.info("Partition is unassigned, delay for 1s and retry")
-                time.sleep(1)
-                self._load_metadata_for_topics(topic)
+                log.info("No partition exist for topic %s", topic)
                 break
 
             for partition, meta in partitions.items():
                 if meta.leader == -1:
-                    log.info("Partition is unassigned, delay for 1s and retry")
-                    time.sleep(1)
-                    self._load_metadata_for_topics(topic)
+                    log.info("Partition %d is unassigned, topic %s", partition, topic)
                 else:
                     topic_part = TopicAndPartition(topic, partition)
                     self.topics_to_brokers[topic_part] = brokers[meta.leader]
@@ -120,7 +113,7 @@ class KafkaClient(object):
                 conn.send(requestId, request)
                 response = conn.recv(requestId)
                 return response
-            except Exception, e:
+            except Exception as e:
                 log.warning("Could not send request [%r] to server %s, "
                             "trying next server: %s" % (request, conn, e))
                 continue
@@ -178,7 +171,7 @@ class KafkaClient(object):
                 if decoder_fn is None:
                     continue
                 response = conn.recv(requestId)
-            except ConnectionError, e:  # ignore BufferUnderflow for now
+            except ConnectionError as e:  # ignore BufferUnderflow for now
                 log.warning("Could not send request [%s] to server %s: %s" % (request, conn, e))
                 failed_payloads += payloads
                 self.topics_to_brokers = {}  # reset metadata
